@@ -1,0 +1,38 @@
+# Mata Sentry Render Node Monitoring System
+
+## Project Overview
+Building an **internal monitoring tool** for a rendering team to watch render progress across multiple nodes (different OS, networks) via a web dashboard. Goal is to avoid VNC-ing into individual machines to check status.
+
+## Key Architecture Decisions
+
+### **Final Agreed Architecture:**
+```
+[Python Agents] → [HTTP POST every 30s] → [Bun Server API] → [JSON Files] → [HTMX Frontend]
+```
+
+### **Data Flow:**
+- **Hosts collect:** hostname, CPU/GPU stats, RAM usage, watched directories, render progress, timestamps
+- **Server accepts:** POST submissions, stores each node's data in individual JSON files (`node_hostname.json`)
+- **Frontend:** HTMX-powered dashboard with auto-refresh every 30s via `hx-trigger`
+
+## Technology Stack (Final)
+- **Client Agents:** Python (chosen over Node.js for better filesystem watching with `watchdog`, cross-platform process monitoring with `psutil`)
+- **Server:** Simple Bun server for HTTP endpoints
+- **Storage:** JSON files (no database - ephemeral by design)
+- **Frontend:** HTMX + static HTML (chosen over React for simplicity)
+- **Communication:** HTTP POST requests (chosen over WebSockets for resilience)
+
+## Build Priority (Red Arrow Strategy)
+1. **Phase 1:** Python agents → Bun Server API → JSON file storage
+2. **Phase 2:** Add render log parsing and progress extraction  
+3. **Phase 3:** HTMX frontend (last priority)
+
+## Key Insights from Discussion
+- **Database rejected:** Tool is ephemeral, no historical data needed
+- **WebSockets rejected:** HTTP POST is simpler, more debuggable, more resilient
+- **HTMX chosen:** Perfect for monitoring dashboards, no build complexity
+- **Internal tool approach:** Build data pipeline first, polish UI last
+
+## Current Status
+Ready to implement Phase 1: Basic Python agent posting heartbeat data to Bun server API that writes JSON files.
+

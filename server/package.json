@@ -1,0 +1,12 @@
+{
+  "name": "mata-sentry-server",
+  "version": "1.0.0",
+  "description": "Internal monitoring server for render nodes",
+  "main": "server.js",
+  "scripts": {
+    "start": "bun run server.js",
+    "dev": "bun --watch server.js"
+  },
+  "type": "module"
+}
+
