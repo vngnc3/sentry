@@ -14,7 +14,7 @@ const server = Bun.serve({
     
     // Hello World endpoint for testing
     if (url.pathname === "/" && req.method === "GET") {
-      return new Response("Hello World! Mata Sentry is running.", {
+      return new Response("Hello World! Mata Sentry Server is running.", {
         headers: { "Content-Type": "text/plain" }
       });
     }
@@ -71,7 +71,7 @@ const server = Bun.serve({
       }
     }
     
-    // List all nodes endpoint (useful for debugging)
+    // List all nodes endpoint with full data
     if (url.pathname === "/nodes" && req.method === "GET") {
       try {
         const files = await Array.fromAsync(
@@ -83,14 +83,19 @@ const server = Bun.serve({
           const filepath = path.join(DATA_DIR, filename);
           const content = await file(filepath).text();
           const nodeData = JSON.parse(content);
+          
+          // Include all the stored data for each node
           nodes.push({
-            hostname: nodeData.hostname,
-            last_seen: nodeData.server_received_at,
-            file: filename
+            filename: filename,
+            data: nodeData
           });
         }
         
-        return Response.json({ nodes, count: nodes.length });
+        return Response.json({ 
+          nodes, 
+          count: nodes.length,
+          retrieved_at: new Date().toISOString()
+        });
         
       } catch (error) {
         console.error("❌ Error listing nodes:", error);
@@ -103,7 +108,7 @@ const server = Bun.serve({
   },
 });
 
-console.log(`🚀 Mata Sentry running on http://localhost:${server.port}`);
+console.log(`🚀 Mata Sentry Server running on http://localhost:${server.port}`);
 console.log(`📁 Data stored in: ${DATA_DIR}/`);
 console.log(`📡 Submit endpoint: POST http://localhost:${server.port}/submit`);
 console.log(`🔍 Nodes list: GET http://localhost:${server.port}/nodes`);
