@@ -20,6 +20,7 @@ import os
 import platform
 import socket
 import subprocess
+import sys
 import time
 from http import client as http_client
 from typing import Dict, Optional
@@ -86,6 +87,36 @@ def load_sentry_config() -> Dict[str, str]:
 
 # Load configuration at startup
 SENTRY_CONFIG = load_sentry_config()
+
+# ────────────────────────────────────────────────────────────
+# 0.5. Rolling Display Functions
+# ────────────────────────────────────────────────────────────
+def clear_and_redraw_status(server_host, server_port, hardware_summary, last_status, last_timestamp):
+    """
+    Clear the console and redraw the client status display.
+    """
+    # Clear the console (works on most terminals)
+    os.system('clear' if os.name == 'posix' else 'cls')
+    
+    # Redraw the status
+    print("Mata Sentry client started. Press Ctrl-C to quit.")
+    print(f"📡 Connecting to server: {server_host}:{server_port}")
+    print(f"🔐 Using authentication: {'*' * len(SENTRY_CONFIG['SENTRY_SECRET'])}")
+    print(f"🖥️  Hardware: {hardware_summary}")
+    
+    # Show optional dependency status
+    if not PSUTIL_AVAILABLE:
+        print("⚠️  psutil not available - install with 'pip install psutil' for enhanced CPU detection")
+    if not GPUTIL_AVAILABLE:
+        print("⚠️  GPUtil not available - install with 'pip install gputil' for enhanced GPU detection")
+    print('')  # Empty line
+    
+    # Display current status
+    if last_status and last_timestamp:
+        status_icon = "✅" if "200" in last_status else "❌"
+        print(f"📊 Status: {status_icon} {last_status} at {last_timestamp}")
+    else:
+        print("📊 Status: Waiting for first update...")
 
 # ────────────────────────────────────────────────────────────
 # 1.  Helpers ─ gathering node information
@@ -454,17 +485,21 @@ SERVER_PORT = int(SENTRY_CONFIG["SERVER_PORT"])
 SERVER_PATH = "/submit"  # agreed endpoint
 HEADERS = {"Content-Type": "application/json"}
 
-def post_payload(payload: Dict[str, str]) -> None:
+def post_payload(payload: Dict[str, str]) -> tuple[str, str]:
+    """
+    Post payload to server and return status information.
+    Returns (status_message, timestamp) tuple.
+    """
     body = json.dumps(payload)
     conn = http_client.HTTPConnection(SERVER_HOST, SERVER_PORT, timeout=10)
     try:
         conn.request("POST", SERVER_PATH, body=body, headers=HEADERS)
         response = conn.getresponse()
-        print(f"{payload['timestamp']} → {response.status} {response.reason}")
-        # Optional: read response body if needed
+        status = f"{response.status} {response.reason}"
         conn.close()
+        return status, payload['timestamp']
     except Exception as exc:
-        print(f"{payload['timestamp']} ✗ POST failed: {exc}")
+        return f"✗ POST failed: {exc}", payload['timestamp']
 
 
 # ────────────────────────────────────────────────────────────
@@ -473,19 +508,21 @@ def post_payload(payload: Dict[str, str]) -> None:
 POST_INTERVAL = 30  # seconds
 
 if __name__ == "__main__":
-    print("Mata Sentry client started. Press Ctrl-C to quit.")
-    print(f"📡 Connecting to server: {SERVER_HOST}:{SERVER_PORT}")
-    print(f"🔐 Using authentication: {'*' * len(SENTRY_CONFIG['SENTRY_SECRET'])}")
-    print(f"🖥️  Hardware: {get_hardware_summary()}")
+    # Initialize display variables
+    hardware_summary = get_hardware_summary()
+    last_status = None
+    last_timestamp = None
     
-    # Show optional dependency status
-    if not PSUTIL_AVAILABLE:
-        print("⚠️  psutil not available - install with 'pip install psutil' for enhanced CPU detection")
-    if not GPUTIL_AVAILABLE:
-        print("⚠️  GPUtil not available - install with 'pip install gputil' for enhanced GPU detection")
+    # Initial display
+    clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp)
     
     while True:
-        data = build_payload()
-        post_payload(data)
-        time.sleep(POST_INTERVAL)
+        try:
+            data = build_payload()
+            last_status, last_timestamp = post_payload(data)
+            clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp)
+            time.sleep(POST_INTERVAL)
+        except KeyboardInterrupt:
+            print("\n\n👋 Mata Sentry client stopped.")
+            break
 
