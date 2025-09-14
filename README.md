@@ -47,6 +47,6 @@ The client now sends the following JSON payload:
 ```
 
 ## Progress, I guess?
-[x] python-based daemon for the client. start simple with few information.
-[x] server
-[ ] front end
+- [x] python-based daemon for the client. start simple with few information.
+- [x] server
+- [ ] front end
