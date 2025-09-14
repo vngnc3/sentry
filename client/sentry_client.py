@@ -16,19 +16,70 @@ Current payload spec
 
 import datetime
 import json
+import os
 import platform
 import socket
 import subprocess
 import time
 from http import client as http_client
-from typing import Dict
+from typing import Dict, Optional
+
+# ────────────────────────────────────────────────────────────
+# 0.  Configuration ─ loading sentry_secret file
+# ────────────────────────────────────────────────────────────
+def load_sentry_config() -> Dict[str, str]:
+    """
+    Load configuration from sentry_secret file.
+    Returns a dictionary with SERVER_HOST, SERVER_PORT, and SENTRY_SECRET.
+    """
+    config = {
+        "SERVER_HOST": "localhost",
+        "SERVER_PORT": "3000", 
+        "SENTRY_SECRET": None
+    }
+    
+    # Look for sentry_secret file in the same directory as this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    secret_file = os.path.join(script_dir, "sentry_secret")
+    
+    if not os.path.exists(secret_file):
+        print(f"❌ Error: sentry_secret file not found at {secret_file}")
+        print("Please create a sentry_secret file with the following format:")
+        print("SERVER_HOST=your-server-host")
+        print("SERVER_PORT=your-server-port")
+        print("SENTRY_SECRET=your-magic-string")
+        exit(1)
+    
+    try:
+        with open(secret_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip()
+                        if key in config:
+                            config[key] = value
+    except Exception as e:
+        print(f"❌ Error reading sentry_secret file: {e}")
+        exit(1)
+    
+    if not config["SENTRY_SECRET"]:
+        print("❌ Error: SENTRY_SECRET not found in sentry_secret file")
+        exit(1)
+    
+    return config
+
+# Load configuration at startup
+SENTRY_CONFIG = load_sentry_config()
 
 # ────────────────────────────────────────────────────────────
 # 1.  Helpers ─ gathering node information
 # ────────────────────────────────────────────────────────────
 def iso_timestamp() -> str:
     """UTC timestamp in ISO-8601 with trailing Z (no microseconds)."""
-    return datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
 
 def get_hostname() -> str:
@@ -96,14 +147,15 @@ def build_payload() -> Dict[str, str]:
         "cpu": get_cpu_name(),
         "gpu": get_gpu_name(),
         "timestamp": iso_timestamp(),
+        "sentry_secret": SENTRY_CONFIG["SENTRY_SECRET"],
     }
 
 
 # ────────────────────────────────────────────────────────────
 # 2.  Transport ─ HTTP POST to Bun server
 # ────────────────────────────────────────────────────────────
-SERVER_HOST = "localhost"      # change to IP/hostname of Bun server
-SERVER_PORT = 3000             # Bun default
+SERVER_HOST = SENTRY_CONFIG["SERVER_HOST"]
+SERVER_PORT = int(SENTRY_CONFIG["SERVER_PORT"])
 SERVER_PATH = "/submit"  # agreed endpoint
 HEADERS = {"Content-Type": "application/json"}
 
@@ -127,6 +179,8 @@ POST_INTERVAL = 30  # seconds
 
 if __name__ == "__main__":
     print("Mata Sentry client started. Press Ctrl-C to quit.")
+    print(f"📡 Connecting to server: {SERVER_HOST}:{SERVER_PORT}")
+    print(f"🔐 Using authentication: {'*' * len(SENTRY_CONFIG['SENTRY_SECRET'])}")
     while True:
         data = build_payload()
         post_payload(data)

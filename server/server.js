@@ -4,11 +4,15 @@ import path from "path";
 
 const DATA_DIR = "./data";
 
+// Load environment variables
+const SENTRY_SECRET = process.env.SENTRY_SECRET || "default-secret-change-me";
+const SERVER_PORT = process.env.SERVER_PORT || 3000;
+
 // Ensure data directory exists
 await Bun.write(path.join(DATA_DIR, ".gitkeep"), "");
 
 const server = Bun.serve({
-  port: 3000,
+  port: SERVER_PORT,
   async fetch(req) {
     const url = new URL(req.url);
     
@@ -32,6 +36,14 @@ const server = Bun.serve({
     if (url.pathname === "/submit" && req.method === "POST") {
       try {
         const data = await req.json();
+        
+        // Validate magic string authentication
+        if (!data.sentry_secret || data.sentry_secret !== SENTRY_SECRET) {
+          return Response.json(
+            { error: "Invalid or missing sentry_secret" }, 
+            { status: 401 }
+          );
+        }
         
         // Validate required fields
         if (!data.hostname) {
@@ -79,15 +91,32 @@ const server = Bun.serve({
         );
         
         const nodes = [];
+        const now = new Date();
+        const twoMinutesAgo = new Date(now.getTime() - 2 * 60 * 1000); // 2 minutes ago
+        
         for (const filename of files) {
           const filepath = path.join(DATA_DIR, filename);
           const content = await file(filepath).text();
           const nodeData = JSON.parse(content);
           
+          // Check if node is online (timestamp within 2 minutes)
+          let isOnline = false;
+          if (nodeData.timestamp) {
+            const timestampDate = new Date(nodeData.timestamp);
+            isOnline = timestampDate > twoMinutesAgo;
+          }
+          
+          // Add is_online field to the data and remove sensitive fields
+          const { sentry_secret, ...nodeDataWithoutSecret } = nodeData;
+          const nodeDataWithOnlineStatus = {
+            ...nodeDataWithoutSecret,
+            is_online: isOnline
+          };
+          
           // Include all the stored data for each node
           nodes.push({
             filename: filename,
-            data: nodeData
+            data: nodeDataWithOnlineStatus
           });
         }
         

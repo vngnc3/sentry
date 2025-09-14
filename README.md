@@ -18,7 +18,35 @@ Few rule of thumb in the creation of this tool:
 A single server running endpoints to receive data from each render nodes, store it as a JSON file for each node, while providing REST API to be fetched by the front end application. No database. No historical data stored. Everything is assumed to be ephemeral.  
 Front end application will be built with web technologies, possibly with HTMX or any other framework we see fit.  
 
+## Security Features
+The system now includes authentication using a shared "magic string" secret:
+
+### Server Setup
+1. Copy `server/env.example` to `server/.env`
+2. Set your `SENTRY_SECRET` value in the `.env` file
+3. Optionally configure `SERVER_PORT` (defaults to 3000)
+
+### Client Setup
+1. Copy `client/sentry_secret.example` to `client/sentry_secret`
+2. Set the `SERVER_HOST` and `SERVER_PORT` to match your server
+3. Set the `SENTRY_SECRET` to match the server's secret
+
+The client will automatically include the magic string in all POST requests, and the server will validate it before processing any data submissions.
+
+### Updated Payload Format
+The client now sends the following JSON payload:
+```json
+{
+  "hostname": "render-node-01",
+  "os": "macOS 15.6.1 arm64",
+  "cpu": "cpu-name",
+  "gpu": "gpu-name",
+  "timestamp": "2025-09-08T02:21:00Z",
+  "sentry_secret": "your-magic-string"
+}
+```
+
 ## Progress, I guess?
-[ ] python-based daemon for the client. start simple with few information.
-[ ] server
+[x] python-based daemon for the client. start simple with few information.
+[x] server
 [ ] front end
