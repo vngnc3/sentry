@@ -99,6 +99,16 @@ def get_hostname() -> str:
     return socket.gethostname()
 
 
+def is_vcgencmd_available() -> bool:
+    """
+    Check if vcgencmd is available (Raspberry Pi OS only).
+    """
+    try:
+        subprocess.check_output(["vcgencmd", "commands"], text=True, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
 def get_os_string() -> str:
     """
     Return OS string like 'macOS 15.6.1 arm64'.
@@ -179,24 +189,28 @@ def get_cpu_name() -> str:
         except Exception:
             pass
     
-    # Raspberry Pi specific - try vcgencmd
-    try:
-        result = subprocess.check_output(["vcgencmd", "get_cpu"], text=True)
-        if "arm" in result.lower():
-            # Try to get more specific info from /proc/cpuinfo
-            try:
-                with open("/proc/cpuinfo", "r") as f:
-                    for line in f:
-                        if line.startswith("Hardware"):
+    # ARM-specific detection (including Raspberry Pi)
+    if system == "Linux":
+        try:
+            with open("/proc/cpuinfo", "r") as f:
+                cpuinfo = f.read()
+                if "arm" in cpuinfo.lower() or "aarch64" in cpuinfo.lower():
+                    # Try to get specific ARM processor info
+                    for line in cpuinfo.split("\n"):
+                        if line.startswith("model name") or line.startswith("Processor"):
+                            processor = line.split(":")[1].strip()
+                            if processor and processor != "":
+                                return processor
+                        elif line.startswith("Hardware"):
                             hardware = line.split(":")[1].strip()
-                            if hardware != "BCM2835":  # Skip generic Pi hardware
-                                return f"Raspberry Pi {hardware}"
-                            break
-            except Exception:
-                pass
-            return "Raspberry Pi ARM"
-    except Exception:
-        pass
+                            if hardware and hardware != "":
+                                return f"ARM {hardware}"
+                        elif line.startswith("CPU architecture"):
+                            arch = line.split(":")[1].strip()
+                            if arch and arch != "":
+                                return f"ARM {arch}"
+        except Exception:
+            pass
     
     # Fallback to platform.processor() or psutil
     if PSUTIL_AVAILABLE:
@@ -309,20 +323,74 @@ def get_gpu_name() -> str:
         except Exception:
             pass
     
-    # Raspberry Pi specific - try vcgencmd
-    try:
-        result = subprocess.check_output(["vcgencmd", "get_cpu"], text=True)
-        if "arm" in result.lower():
-            # Check if it's a Pi with GPU
-            try:
-                gpu_mem = subprocess.check_output(["vcgencmd", "get_mem", "gpu"], text=True)
-                if "gpu=" in gpu_mem:
-                    return "Raspberry Pi GPU"
-            except Exception:
-                pass
-            return "Raspberry Pi VideoCore"
-    except Exception:
-        pass
+    # ARM-specific GPU detection (including Raspberry Pi)
+    if system == "Linux":
+        try:
+            with open("/proc/cpuinfo", "r") as f:
+                cpuinfo = f.read()
+                if "arm" in cpuinfo.lower() or "aarch64" in cpuinfo.lower():
+                    # Check for Mali GPU (common on ARM systems)
+                    try:
+                        result = subprocess.check_output(["lspci"], text=True)
+                        for line in result.split("\n"):
+                            if "mali" in line.lower() or "gpu" in line.lower():
+                                gpu_name = line.split(":")[-1].strip()
+                                if gpu_name and gpu_name != "":
+                                    return gpu_name
+                    except Exception:
+                        pass
+                    
+                    # Check for VideoCore (Raspberry Pi specific) - only if vcgencmd is available
+                    if is_vcgencmd_available():
+                        try:
+                            result = subprocess.check_output(["vcgencmd", "get_cpu"], text=True)
+                            if "arm" in result.lower():
+                                return "Raspberry Pi VideoCore"
+                        except Exception:
+                            pass
+                    
+                    # Check for ARM GPU in device tree
+                    try:
+                        if os.path.exists("/proc/device-tree/soc/gpu"):
+                            return "ARM Mali GPU"
+                    except Exception:
+                        pass
+                    
+                    # Check for GPU in /sys/class/graphics
+                    try:
+                        if os.path.exists("/sys/class/graphics"):
+                            for item in os.listdir("/sys/class/graphics"):
+                                if item.startswith("fb"):
+                                    # Check for Mali GPU in framebuffer
+                                    try:
+                                        with open(f"/sys/class/graphics/{item}/name", "r") as f:
+                                            name = f.read().strip()
+                                            if "mali" in name.lower():
+                                                return f"ARM {name}"
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+                    
+                    # Check for GPU in /dev/dri
+                    try:
+                        if os.path.exists("/dev/dri"):
+                            for item in os.listdir("/dev/dri"):
+                                if item.startswith("card"):
+                                    # Try to get GPU info from DRI
+                                    try:
+                                        result = subprocess.check_output(["cat", f"/sys/class/drm/{item}/device/uevent"], text=True)
+                                        for line in result.split("\n"):
+                                            if "DRIVER=" in line:
+                                                driver = line.split("=")[1].strip()
+                                                if "mali" in driver.lower():
+                                                    return f"ARM Mali GPU ({driver})"
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
     
     # Try to detect integrated graphics from CPU info
     try:
@@ -331,8 +399,25 @@ def get_gpu_name() -> str:
             return "Intel Integrated Graphics"
         elif "amd" in cpu_name:
             return "AMD Integrated Graphics"
-        elif "arm" in cpu_name or "raspberry" in cpu_name:
-            return "ARM Mali GPU"
+        elif "arm" in cpu_name or "cortex" in cpu_name:
+            # For ARM systems, try to detect specific GPU
+            if system == "Linux":
+                # Check for common ARM GPU drivers
+                try:
+                    if os.path.exists("/sys/class/drm"):
+                        for item in os.listdir("/sys/class/drm"):
+                            if "card" in item:
+                                # Check if it's a Mali GPU
+                                try:
+                                    with open(f"/sys/class/drm/{item}/device/uevent", "r") as f:
+                                        uevent = f.read()
+                                        if "mali" in uevent.lower():
+                                            return "ARM Mali GPU"
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+            return "ARM Integrated Graphics"
     except Exception:
         pass
     
