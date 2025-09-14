@@ -31,6 +31,25 @@ The system now includes authentication using a shared "magic string" secret:
 2. Set the `SERVER_HOST` and `SERVER_PORT` to match your server
 3. Set the `SENTRY_SECRET` to match the server's secret
 
+#### Enhanced Hardware Detection (Optional)
+For better hardware detection across different platforms, install optional dependencies:
+
+```bash
+# Install enhanced dependencies
+pip install -r client/requirements.txt
+
+# Or run the installation script
+chmod +x client/install_enhanced_deps.sh
+./client/install_enhanced_deps.sh
+```
+
+**Supported Platforms:**
+- **macOS**: Uses `sysctl` and `system_profiler`
+- **Linux**: Uses `/proc/cpuinfo`, `lspci`, `nvidia-smi`, `glxinfo`
+- **Windows**: Uses `wmic` commands
+- **Raspberry Pi**: Uses `vcgencmd` and ARM-specific detection
+- **Cross-platform**: Falls back to `psutil` and `GPUtil` when available
+
 The client will automatically include the magic string in all POST requests, and the server will validate it before processing any data submissions.
 
 ### Updated Payload Format

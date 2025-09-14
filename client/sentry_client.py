@@ -24,6 +24,19 @@ import time
 from http import client as http_client
 from typing import Dict, Optional
 
+# Optional imports for enhanced hardware detection
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
+
+try:
+    import GPUtil
+    GPUTIL_AVAILABLE = True
+except ImportError:
+    GPUTIL_AVAILABLE = False
+
 # ────────────────────────────────────────────────────────────
 # 0.  Configuration ─ loading sentry_secret file
 # ────────────────────────────────────────────────────────────
@@ -107,9 +120,13 @@ def get_os_string() -> str:
 
 def get_cpu_name() -> str:
     """
-    Tries sysctl (macOS) first, otherwise falls back to platform.processor().
+    Enhanced CPU detection with support for multiple platforms.
+    Tries platform-specific methods first, then falls back to generic methods.
     """
-    if platform.system() == "Darwin":
+    system = platform.system()
+    
+    # macOS - use sysctl
+    if system == "Darwin":
         try:
             return (
                 subprocess.check_output(["sysctl", "-n", "machdep.cpu.brand_string"],
@@ -118,14 +135,105 @@ def get_cpu_name() -> str:
             )
         except Exception:
             pass
-    return platform.processor() or "unknown-cpu"
+    
+    # Linux - try multiple methods
+    elif system == "Linux":
+        # Try /proc/cpuinfo first (most reliable on Linux)
+        try:
+            with open("/proc/cpuinfo", "r") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        return line.split(":")[1].strip()
+        except Exception:
+            pass
+        
+        # Try lscpu command
+        try:
+            result = subprocess.check_output(["lscpu"], text=True)
+            for line in result.split("\n"):
+                if "Model name:" in line:
+                    return line.split(":")[1].strip()
+        except Exception:
+            pass
+        
+        # Try dmidecode (if available)
+        try:
+            result = subprocess.check_output(["dmidecode", "-t", "processor"], text=True)
+            for line in result.split("\n"):
+                if "Version:" in line and "Not Specified" not in line:
+                    return line.split(":")[1].strip()
+        except Exception:
+            pass
+    
+    # Windows - try wmic
+    elif system == "Windows":
+        try:
+            result = subprocess.check_output(
+                ["wmic", "cpu", "get", "name", "/value"], 
+                text=True, 
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            for line in result.split("\n"):
+                if line.startswith("Name="):
+                    return line.split("=", 1)[1].strip()
+        except Exception:
+            pass
+    
+    # Raspberry Pi specific - try vcgencmd
+    try:
+        result = subprocess.check_output(["vcgencmd", "get_cpu"], text=True)
+        if "arm" in result.lower():
+            # Try to get more specific info from /proc/cpuinfo
+            try:
+                with open("/proc/cpuinfo", "r") as f:
+                    for line in f:
+                        if line.startswith("Hardware"):
+                            hardware = line.split(":")[1].strip()
+                            if hardware != "BCM2835":  # Skip generic Pi hardware
+                                return f"Raspberry Pi {hardware}"
+                            break
+            except Exception:
+                pass
+            return "Raspberry Pi ARM"
+    except Exception:
+        pass
+    
+    # Fallback to platform.processor() or psutil
+    if PSUTIL_AVAILABLE:
+        try:
+            # psutil provides more detailed CPU info
+            cpu_info = psutil.cpu_freq()
+            if cpu_info and cpu_info.max:
+                return f"CPU @ {cpu_info.max:.0f}MHz"
+        except Exception:
+            pass
+    
+    # Final fallback
+    processor = platform.processor()
+    if processor and processor != "":
+        return processor
+    
+    return "unknown-cpu"
 
 
 def get_gpu_name() -> str:
     """
-    Uses system_profiler (macOS). For Windows/Linux you’ll replace this block.
+    Enhanced GPU detection with support for multiple platforms.
+    Tries platform-specific methods first, then falls back to generic methods.
     """
-    if platform.system() == "Darwin":
+    system = platform.system()
+    
+    # Try GPUtil first (works for NVIDIA GPUs on all platforms)
+    if GPUTIL_AVAILABLE:
+        try:
+            gpus = GPUtil.getGPUs()
+            if gpus:
+                return gpus[0].name
+        except Exception:
+            pass
+    
+    # macOS - use system_profiler
+    if system == "Darwin":
         try:
             sp = subprocess.check_output(
                 ["system_profiler", "SPDisplaysDataType", "-json"], text=True
@@ -137,8 +245,110 @@ def get_gpu_name() -> str:
                 return gpus[0].get("_name", "unknown-gpu")
         except Exception:
             pass
+    
+    # Linux - try multiple methods
+    elif system == "Linux":
+        # Try lspci for PCI devices
+        try:
+            result = subprocess.check_output(["lspci"], text=True)
+            for line in result.split("\n"):
+                if "vga" in line.lower() or "display" in line.lower() or "3d" in line.lower():
+                    # Extract GPU name from lspci output
+                    gpu_name = line.split(":")[-1].strip()
+                    if gpu_name and gpu_name != "":
+                        return gpu_name
+        except Exception:
+            pass
+        
+        # Try nvidia-smi for NVIDIA GPUs
+        try:
+            result = subprocess.check_output(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True)
+            if result.strip():
+                return result.strip()
+        except Exception:
+            pass
+        
+        # Try /proc/driver/nvidia/gpus/ for NVIDIA GPUs
+        try:
+            nvidia_dir = "/proc/driver/nvidia/gpus/"
+            if os.path.exists(nvidia_dir):
+                for gpu_dir in os.listdir(nvidia_dir):
+                    info_file = os.path.join(nvidia_dir, gpu_dir, "information")
+                    if os.path.exists(info_file):
+                        with open(info_file, "r") as f:
+                            for line in f:
+                                if line.startswith("Model:"):
+                                    return line.split(":")[1].strip()
+        except Exception:
+            pass
+        
+        # Try glxinfo for OpenGL info
+        try:
+            result = subprocess.check_output(["glxinfo"], text=True)
+            for line in result.split("\n"):
+                if "OpenGL renderer string:" in line:
+                    renderer = line.split(":")[1].strip()
+                    if renderer and renderer != "":
+                        return renderer
+        except Exception:
+            pass
+    
+    # Windows - try wmic
+    elif system == "Windows":
+        try:
+            result = subprocess.check_output(
+                ["wmic", "path", "win32_VideoController", "get", "name", "/value"], 
+                text=True, 
+                creationflags=subprocess.CREATE_NO_WINDOW
+            )
+            for line in result.split("\n"):
+                if line.startswith("Name=") and "=" in line:
+                    gpu_name = line.split("=", 1)[1].strip()
+                    if gpu_name and gpu_name != "":
+                        return gpu_name
+        except Exception:
+            pass
+    
+    # Raspberry Pi specific - try vcgencmd
+    try:
+        result = subprocess.check_output(["vcgencmd", "get_cpu"], text=True)
+        if "arm" in result.lower():
+            # Check if it's a Pi with GPU
+            try:
+                gpu_mem = subprocess.check_output(["vcgencmd", "get_mem", "gpu"], text=True)
+                if "gpu=" in gpu_mem:
+                    return "Raspberry Pi GPU"
+            except Exception:
+                pass
+            return "Raspberry Pi VideoCore"
+    except Exception:
+        pass
+    
+    # Try to detect integrated graphics from CPU info
+    try:
+        cpu_name = get_cpu_name().lower()
+        if "intel" in cpu_name:
+            return "Intel Integrated Graphics"
+        elif "amd" in cpu_name:
+            return "AMD Integrated Graphics"
+        elif "arm" in cpu_name or "raspberry" in cpu_name:
+            return "ARM Mali GPU"
+    except Exception:
+        pass
+    
     return "unknown-gpu"
 
+
+def get_hardware_summary() -> str:
+    """
+    Get a brief hardware summary for debugging purposes.
+    """
+    try:
+        cpu = get_cpu_name()
+        gpu = get_gpu_name()
+        return f"CPU: {cpu}, GPU: {gpu}"
+    except Exception:
+        return "Hardware detection failed"
 
 def build_payload() -> Dict[str, str]:
     return {
@@ -181,6 +391,14 @@ if __name__ == "__main__":
     print("Mata Sentry client started. Press Ctrl-C to quit.")
     print(f"📡 Connecting to server: {SERVER_HOST}:{SERVER_PORT}")
     print(f"🔐 Using authentication: {'*' * len(SENTRY_CONFIG['SENTRY_SECRET'])}")
+    print(f"🖥️  Hardware: {get_hardware_summary()}")
+    
+    # Show optional dependency status
+    if not PSUTIL_AVAILABLE:
+        print("⚠️  psutil not available - install with 'pip install psutil' for enhanced CPU detection")
+    if not GPUTIL_AVAILABLE:
+        print("⚠️  GPUtil not available - install with 'pip install gputil' for enhanced GPU detection")
+    
     while True:
         data = build_payload()
         post_payload(data)

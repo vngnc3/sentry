@@ -1,6 +1,7 @@
 // server.js
 import { file } from "bun";
 import path from "path";
+import { networkInterfaces } from "os";
 
 const DATA_DIR = "./data";
 
@@ -11,7 +12,25 @@ const SERVER_PORT = process.env.SERVER_PORT || 3000;
 // Ensure data directory exists
 await Bun.write(path.join(DATA_DIR, ".gitkeep"), "");
 
+// Function to get network IP addresses
+function getNetworkIPs() {
+  const interfaces = networkInterfaces();
+  const ips = [];
+  
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      // Skip internal (loopback) and non-IPv4 addresses
+      if (iface.family === 'IPv4' && !iface.internal) {
+        ips.push(iface.address);
+      }
+    }
+  }
+  
+  return ips;
+}
+
 const server = Bun.serve({
+  hostname: "0.0.0.0", // Allow access from other devices
   port: SERVER_PORT,
   async fetch(req) {
     const url = new URL(req.url);
@@ -137,8 +156,19 @@ const server = Bun.serve({
   },
 });
 
-console.log(`🚀 Mata Sentry Server running on http://localhost:${server.port}`);
+// Get network IPs for display
+const networkIPs = getNetworkIPs();
+
+console.log(`🚀 Mata Sentry Server running on:`);
+console.log(`   Local:   http://localhost:${server.port}`);
+if (networkIPs.length > 0) {
+  networkIPs.forEach(ip => {
+    console.log(`   Network: http://${ip}:${server.port}`);
+  });
+} else {
+  console.log(`   Network: No network interfaces found`);
+}
+
 console.log(`📁 Data stored in: ${DATA_DIR}/`);
 console.log(`📡 Submit endpoint: POST http://localhost:${server.port}/submit`);
 console.log(`🔍 Nodes list: GET http://localhost:${server.port}/nodes`);
-

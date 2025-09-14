@@ -1,0 +1,19 @@
+# Optional dependencies for enhanced hardware detection
+# Install with: pip install -r requirements.txt
+
+# Cross-platform system and process utilities
+psutil>=5.9.0
+
+# GPU detection (primarily for NVIDIA GPUs)
+GPUtil>=1.4.0
+
+# Additional optional packages for specific platforms:
+
+# For Raspberry Pi specific features (if needed)
+# vcgencmd>=0.1.0
+
+# For comprehensive system information (alternative to psutil)
+# nodespecs>=0.1.0
+
+# For system benchmarking and hardware info
+# SysBenchInfo>=0.1.0
