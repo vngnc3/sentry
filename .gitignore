@@ -1,1 +1,5 @@
 server/data/
+
+# Sensitive configuration files
+server/.env
+client/sentry_secret
