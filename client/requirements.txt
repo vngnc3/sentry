@@ -1,4 +1,4 @@
-# Optional dependencies for enhanced hardware detection
+# Optional dependencies for enhanced hardware detection and temperature monitoring
 # Install with: pip install -r requirements.txt
 
 # Cross-platform system and process utilities
@@ -6,6 +6,14 @@ psutil>=5.9.0
 
 # GPU detection (primarily for NVIDIA GPUs)
 GPUtil>=1.4.0
+
+# Temperature monitoring dependencies:
+
+# NVIDIA GPU temperature monitoring
+nvidia-ml-py3>=11.0.0
+
+# Windows system management (for temperature monitoring)
+WMI>=1.5.1; sys_platform == "win32"
 
 # Additional optional packages for specific platforms:
 
