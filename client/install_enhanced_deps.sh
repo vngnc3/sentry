@@ -12,9 +12,9 @@ pip install psutil
 echo "Installing GPUtil..."
 pip install GPUtil
 
-# Install nvidia-ml-py3 for NVIDIA GPU temperature monitoring
-echo "Installing nvidia-ml-py3 for GPU temperature monitoring..."
-pip install nvidia-ml-py3
+# Install pynvml for NVIDIA GPU temperature monitoring
+echo "Installing pynvml for GPU temperature monitoring..."
+pip install pynvml
 
 # Install WMI for Windows temperature monitoring (Windows only)
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
