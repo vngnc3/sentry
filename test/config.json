@@ -1,0 +1,6 @@
+{
+    "output_directory": "renderOutput",
+    "total_frames": 100,
+    "estimated_render_time_per_frame": 4,
+    "pct_deviation_time_per_frame": 5
+}
