@@ -1,5 +1,10 @@
-server/data/
-
 # Sensitive configuration files
 server/.env
 client/sentry_secret
+
+# Temporary files
+server/data/
+test/renderOutput/
+
+# OS files
+.DS_store
