@@ -24,12 +24,14 @@ import datetime
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
 import sys
 import time
 from http import client as http_client
-from typing import Dict, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
 # Optional imports for enhanced hardware detection
 try:
@@ -108,9 +110,213 @@ def load_sentry_config() -> Dict[str, str]:
 SENTRY_CONFIG = load_sentry_config()
 
 # ────────────────────────────────────────────────────────────
+# 0.6. User Input and Render Monitoring Configuration
+# ────────────────────────────────────────────────────────────
+def get_user_input() -> Tuple[str, int, int]:
+    """
+    Get render directory and frame range from user input.
+    Returns (render_directory, start_frame, end_frame).
+    """
+    print("🎬 Mata Sentry Render Monitor")
+    print("=" * 50)
+    
+    # Get render directory
+    while True:
+        render_dir = input("📁 Enter render output directory path: ").strip()
+        if not render_dir:
+            print("❌ Please enter a valid directory path.")
+            continue
+        
+        # Resolve the path (handles relative paths and normalizes separators)
+        render_path = Path(render_dir).resolve()
+        
+        if not render_path.exists():
+            print(f"❌ Error: Directory does not exist: {render_path}")
+            print("Please ensure the render output directory exists before starting the monitor.")
+            exit(1)
+        elif not render_path.is_dir():
+            print(f"❌ Error: Path exists but is not a directory: {render_path}")
+            exit(1)
+        else:
+            print(f"✅ Using directory: {render_path}")
+            break
+    
+    # Get frame range
+    while True:
+        try:
+            start_frame = int(input("🎬 Enter start frame number: ").strip())
+            break
+        except ValueError:
+            print("❌ Please enter a valid integer for start frame.")
+    
+    while True:
+        try:
+            end_frame = int(input("🎬 Enter end frame number: ").strip())
+            if end_frame < start_frame:
+                print(f"❌ End frame ({end_frame}) must be >= start frame ({start_frame})")
+                continue
+            break
+        except ValueError:
+            print("❌ Please enter a valid integer for end frame.")
+    
+    print(f"✅ Monitoring: {render_dir} for frames {start_frame}-{end_frame}")
+    print("=" * 50)
+    
+    return str(render_path), start_frame, end_frame
+
+def extract_frame_number(filename: str) -> Optional[int]:
+    """
+    Extract frame number from filename.
+    Handles various padding formats (2-10 digits) and file extensions.
+    Returns None if no frame number found.
+    """
+    # Remove file extension
+    name_without_ext = os.path.splitext(filename)[0]
+    
+    # Pattern to match frame numbers at the end of filename
+    # Supports 2-10 digit padding with optional separators
+    patterns = [
+        r'(\d{2,10})$',  # 2-10 digits at the end
+        r'[._-](\d{2,10})$',  # 2-10 digits after separator
+        r'(\d{2,10})[._-]',  # 2-10 digits before separator at end
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, name_without_ext)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                continue
+    
+    return None
+
+def get_render_files(render_dir: str, start_frame: int, end_frame: int) -> List[Tuple[str, int, float]]:
+    """
+    Get all render files in the directory with their frame numbers and modification times.
+    Returns list of (filename, frame_number, mtime) tuples.
+    """
+    render_path = Path(render_dir)
+    if not render_path.exists():
+        return []
+    
+    files = []
+    for file_path in render_path.iterdir():
+        if file_path.is_file():
+            frame_num = extract_frame_number(file_path.name)
+            if frame_num is not None and start_frame <= frame_num <= end_frame:
+                files.append((file_path.name, frame_num, file_path.stat().st_mtime))
+    
+    # Sort by frame number
+    files.sort(key=lambda x: x[1])
+    return files
+
+def determine_node_status(render_progress: Dict[str, any], last_frame_count: int, current_time: float, last_post_time: float) -> str:
+    """
+    Determine the current status of the render node.
+    Returns: 'idling', 'rendering', or 'needs attention'
+    """
+    total_frames = render_progress['total_frames']
+    rendered_frames = render_progress['rendered_frames']
+    frame_delta_time = render_progress['frame_delta_time']
+    
+    # If no frames have been rendered yet, it's idling
+    if rendered_frames == 0:
+        return 'idling'
+    
+    # If all frames are rendered, it's idling
+    if rendered_frames >= total_frames:
+        return 'idling'
+    
+    # If we have a frame delta time, check if we're overdue for a new frame
+    if frame_delta_time:
+        try:
+            # Parse the delta time string (format: "H:MM:SS" or "MM:SS")
+            delta_parts = frame_delta_time.split(':')
+            if len(delta_parts) == 3:  # H:MM:SS
+                hours, minutes, seconds = map(int, delta_parts)
+                delta_seconds = hours * 3600 + minutes * 60 + seconds
+            elif len(delta_parts) == 2:  # MM:SS
+                minutes, seconds = map(int, delta_parts)
+                delta_seconds = minutes * 60 + seconds
+            else:
+                # Fallback: assume it's just seconds
+                delta_seconds = int(delta_parts[0])
+            
+            # Check if we're overdue (4x the known delta time)
+            time_since_last_post = current_time - last_post_time
+            expected_next_frame_time = delta_seconds * 4
+            
+            if time_since_last_post > expected_next_frame_time:
+                return 'needs attention'
+        except (ValueError, IndexError):
+            # If we can't parse the delta time, fall back to a simple check
+            time_since_last_post = current_time - last_post_time
+            if time_since_last_post > 300:  # 5 minutes without activity
+                return 'needs attention'
+    
+    # If we have new frames since last check, we're actively rendering
+    if rendered_frames > last_frame_count:
+        return 'rendering'
+    
+    # If we're in the middle of rendering but no new frames, check timing
+    time_since_last_post = current_time - last_post_time
+    if time_since_last_post > 300:  # 5 minutes without activity
+        return 'needs attention'
+    
+    # Default to rendering if we're in progress
+    return 'rendering'
+
+def get_render_progress(render_dir: str, start_frame: int, end_frame: int) -> Dict[str, any]:
+    """
+    Get current render progress information.
+    Returns dictionary with progress stats including delta time between last two frames.
+    """
+    files = get_render_files(render_dir, start_frame, end_frame)
+    
+    if not files:
+        return {
+            "total_frames": end_frame - start_frame + 1,
+            "rendered_frames": 0,
+            "progress_percentage": 0.0,
+            "latest_frame": None,
+            "frame_delta_time": None,
+            "missing_frames": list(range(start_frame, end_frame + 1))
+        }
+    
+    # Get latest frame info
+    latest_file, latest_frame, latest_mtime = files[-1]
+    
+    # Calculate delta time between last two frames
+    frame_delta_time = None
+    if len(files) >= 2:
+        # Get the second-to-last frame
+        second_last_file, second_last_frame, second_last_mtime = files[-2]
+        delta_seconds = latest_mtime - second_last_mtime
+        frame_delta_time = str(datetime.timedelta(seconds=int(delta_seconds)))
+    
+    # Find missing frames
+    rendered_frames = {frame for _, frame, _ in files}
+    missing_frames = [frame for frame in range(start_frame, end_frame + 1) if frame not in rendered_frames]
+    
+    # Calculate progress
+    total_frames = end_frame - start_frame + 1
+    rendered_count = len(files)
+    progress_percentage = (rendered_count / total_frames) * 100
+    
+    return {
+        "total_frames": total_frames,
+        "rendered_frames": rendered_count,
+        "progress_percentage": round(progress_percentage, 1),
+        "latest_frame": latest_frame,
+        "frame_delta_time": frame_delta_time,
+        "missing_frames": missing_frames[:10] if len(missing_frames) > 10 else missing_frames  # Limit to first 10
+    }
+
+# ────────────────────────────────────────────────────────────
 # 0.5. Rolling Display Functions
 # ────────────────────────────────────────────────────────────
-def clear_and_redraw_status(server_host, server_port, hardware_summary, last_status, last_timestamp):
+def clear_and_redraw_status(server_host, server_port, hardware_summary, last_status, last_timestamp, render_progress=None, render_dir=None, start_frame=None, end_frame=None, node_status="idling"):
     """
     Clear the console and redraw the client status display.
     """
@@ -118,10 +324,43 @@ def clear_and_redraw_status(server_host, server_port, hardware_summary, last_sta
     os.system('clear' if os.name == 'posix' else 'cls')
     
     # Redraw the status
-    print("Mata Sentry client started. Press Ctrl-C to quit.")
-    print(f"📡 Connecting to server: {server_host}:{server_port}")
-    print(f"🔐 Using authentication: {'*' * len(SENTRY_CONFIG['SENTRY_SECRET'])}")
+    print("🎬 Mata Sentry Render Monitor - Press Ctrl-C to quit")
+    print("=" * 60)
+    print(f"📡 Server: {server_host}:{server_port}")
+    print(f"🔐 Auth: {'*' * len(SENTRY_CONFIG['SENTRY_SECRET'])}")
     print(f"🖥️  Hardware: {hardware_summary}")
+    
+    # Show node status
+    status_icons = {
+        "idling": "😴",
+        "rendering": "🎬", 
+        "needs attention": "⚠️"
+    }
+    status_icon = status_icons.get(node_status, "❓")
+    print(f"📊 Node Status: {status_icon} {node_status.upper()}")
+    
+    # Show render monitoring info
+    if render_dir and start_frame is not None and end_frame is not None:
+        print(f"📁 Monitoring: {render_dir}")
+        print(f"🎬 Frame Range: {start_frame}-{end_frame}")
+        
+        if render_progress:
+            progress = render_progress
+            print(f"📊 Progress: {progress['rendered_frames']}/{progress['total_frames']} frames ({progress['progress_percentage']}%)")
+            
+            if progress['latest_frame'] is not None:
+                frame_info = f"Latest Frame: {progress['latest_frame']}"
+                if progress['frame_delta_time']:
+                    frame_info += f" (Δ: {progress['frame_delta_time']})"
+                print(f"🎯 {frame_info}")
+            else:
+                print("🎯 Latest Frame: None (no frames rendered yet)")
+            
+            if progress['missing_frames']:
+                missing_str = str(progress['missing_frames'])[:50]
+                if len(progress['missing_frames']) > 10:
+                    missing_str += "..."
+                print(f"⏳ Missing: {missing_str}")
     
     # Show optional dependency status
     if not PSUTIL_AVAILABLE:
@@ -137,9 +376,9 @@ def clear_and_redraw_status(server_host, server_port, hardware_summary, last_sta
     # Display current status
     if last_status and last_timestamp:
         status_icon = "✅" if "200" in last_status else "❌"
-        print(f"📊 Status: {status_icon} {last_status} at {last_timestamp}")
+        print(f"📡 Server Status: {status_icon} {last_status} at {last_timestamp}")
     else:
-        print("📊 Status: Waiting for first update...")
+        print("📡 Server Status: Waiting for first update...")
 
 # ────────────────────────────────────────────────────────────
 # 1.  Helpers ─ gathering node information
@@ -668,7 +907,7 @@ def get_hardware_summary() -> str:
     except Exception:
         return "Hardware detection failed"
 
-def build_payload() -> Dict[str, str]:
+def build_payload(render_progress: Optional[Dict] = None, status: str = "idling") -> Dict[str, any]:
     payload = {
         "hostname": get_hostname(),
         "os": get_os_string(),
@@ -676,6 +915,7 @@ def build_payload() -> Dict[str, str]:
         "gpu": get_gpu_name(),
         "timestamp": iso_timestamp(),
         "sentry_secret": SENTRY_CONFIG["SENTRY_SECRET"],
+        "status": status,
     }
     
     # Add CPU temperature if available
@@ -687,6 +927,10 @@ def build_payload() -> Dict[str, str]:
     gpu_temp = get_gpu_temperature()
     if gpu_temp is not None:
         payload["gpu_temperature"] = f"{gpu_temp}°C"
+    
+    # Add render progress information if available
+    if render_progress:
+        payload["render_progress"] = render_progress
     
     return payload
 
@@ -717,26 +961,85 @@ def post_payload(payload: Dict[str, str]) -> tuple[str, str]:
 
 
 # ────────────────────────────────────────────────────────────
-# 3.  Main loop
+# 3.  Main loop with dynamic render monitoring
 # ────────────────────────────────────────────────────────────
-POST_INTERVAL = 30  # seconds
+POST_INTERVAL = 30  # Maximum seconds between posts
+CHECK_INTERVAL = 2  # Seconds between directory checks
 
-if __name__ == "__main__":
-    # Initialize display variables
+def monitor_render_directory(render_dir: str, start_frame: int, end_frame: int):
+    """
+    Monitor render directory for new files and post updates dynamically.
+    Posts immediately when new frames are detected, or at least every 30 seconds.
+    """
     hardware_summary = get_hardware_summary()
     last_status = None
     last_timestamp = None
+    last_post_time = 0
+    last_frame_count = 0
     
     # Initial display
-    clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp)
+    render_progress = get_render_progress(render_dir, start_frame, end_frame)
+    initial_status = determine_node_status(render_progress, 0, time.time(), 0)
+    clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp, 
+                           render_progress, render_dir, start_frame, end_frame, initial_status)
+    
+    print("🎬 Starting render monitoring...")
     
     while True:
         try:
-            data = build_payload()
-            last_status, last_timestamp = post_payload(data)
-            clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp)
-            time.sleep(POST_INTERVAL)
+            current_time = time.time()
+            current_progress = get_render_progress(render_dir, start_frame, end_frame)
+            current_frame_count = current_progress['rendered_frames']
+            
+            # Determine current node status
+            node_status = determine_node_status(current_progress, last_frame_count, current_time, last_post_time)
+            
+            # Check if new frames have been added or if it's time for a regular update
+            new_frames_detected = current_frame_count > last_frame_count
+            time_for_regular_update = (current_time - last_post_time) >= POST_INTERVAL
+            
+            if new_frames_detected or time_for_regular_update:
+                # Build and send payload with current status
+                data = build_payload(current_progress, node_status)
+                last_status, last_timestamp = post_payload(data)
+                last_post_time = current_time
+                last_frame_count = current_frame_count
+                
+                # Update display
+                clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp,
+                                       current_progress, render_dir, start_frame, end_frame, node_status)
+                
+                # Show what triggered the update
+                if new_frames_detected:
+                    print(f"🆕 New frame detected! Frame count: {last_frame_count}")
+                elif time_for_regular_update:
+                    print("⏰ Regular status update (30s interval)")
+            
+            # Check if render is complete
+            if current_progress['progress_percentage'] >= 100.0:
+                print("🎉 Render complete! All frames have been rendered.")
+                # Send final update with idling status
+                final_status = "idling"
+                data = build_payload(current_progress, final_status)
+                last_status, last_timestamp = post_payload(data)
+                clear_and_redraw_status(SERVER_HOST, SERVER_PORT, hardware_summary, last_status, last_timestamp,
+                                       current_progress, render_dir, start_frame, end_frame, final_status)
+                print("✅ Final status sent to server. Monitoring will continue...")
+            
+            time.sleep(CHECK_INTERVAL)
+            
         except KeyboardInterrupt:
-            print("\n\n👋 Mata Sentry client stopped.")
+            print("\n\n👋 Mata Sentry render monitor stopped.")
             break
+        except Exception as e:
+            print(f"\n❌ Error in monitoring loop: {e}")
+            print("🔄 Continuing monitoring...")
+            time.sleep(CHECK_INTERVAL)
+
+if __name__ == "__main__":
+    # Get user input for render monitoring
+    render_dir, start_frame, end_frame = get_user_input()
+    
+    # Start monitoring
+    monitor_render_directory(render_dir, start_frame, end_frame)
 
